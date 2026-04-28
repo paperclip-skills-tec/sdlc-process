@@ -56,6 +56,20 @@
         "Proceeds with the in_review PATCH and notes the bypass reason"
       ],
       "files": []
+    },
+    {
+      "id": 5,
+      "name": "pre-handoff-local-only-repo-carve-out",
+      "prompt": "I am handing off TEC-2005 from in_progress to in_review. Workspace exists at /tmp/repo and this repo is intentionally local-only (no origin configured; no push target by design). for-each-ref does not include a branch with TEC-2005 in its name, but my local HEAD includes commit 9f8e7d6 with message 'TEC-2005: implement parser hardening'. What does the pre-handoff gate require?",
+      "expected_output": "Should run/assess the pre-handoff check and identify the first condition as nominally failing (no branch references TEC-2005). Then apply the local-only repo carve-out from the on-fail table: this is non-blocking when the repo has no origin/push target by design and there is a local commit in the active working tree referencing TEC-2005. Should require a checkpoint note that the repo is local-only and cite commit 9f8e7d6 before handoff. Should not instruct creating/pushing a branch when push is impossible by design.",
+      "assertions": [
+        "Recognises the no-branch condition",
+        "Applies the local-only repo carve-out instead of hard-failing",
+        "Requires explicit checkpoint note that repo is local-only",
+        "Requires citing a local commit SHA that references the identifier",
+        "Does not require a push/origin action for the carve-out path"
+      ],
+      "files": []
     }
   ]
 }

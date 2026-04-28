@@ -42,18 +42,16 @@ Skills are high-leverage prompt code that every agent in the company depends on.
 4. **Two-reviewer rule:** every skill PR requires **Dev Lead + QA Engineer** approval before merge, regardless of size. Branch protection on `main` enforces 1 review at the GitHub level; the second is a process expectation (and is what `CODEOWNERS` will eventually automate). The detailed reviewer checklist lives in the QA-owned skill-PR review doc — see [TEC-1048](/TEC/issues/TEC-1048).
 5. **No secrets in commits or PR descriptions.** Skill bodies are prompt text — every reviewer reads them. Treat the diff as if it were already public.
 
-### Bot credential contract
+### GitHub credential contract
 
-Agents do not push using personal credentials. A single shared GitHub service account (provisioned by the board / IT under WS5) holds the push credential for the company-skills repo. Paperclip injects it into the heartbeat environment, mirroring the `PAPERCLIP_API_KEY` pattern.
+Agents do not push using their own credentials. A user-supplied GitHub Personal Access Token, scoped to the company-skills repo, is injected into the heartbeat environment per run, mirroring the `PAPERCLIP_API_KEY` pattern. The PAT carries the supplying user's GitHub identity, so its commits are authored by that user — no separate bot login or email override is required.
 
 | Env var | Source | Scope | Purpose |
 | --- | --- | --- | --- |
-| `PAPERCLIP_GH_BOT_TOKEN` | Injected by Paperclip per heartbeat | `repo:write` on the company-skills repo only (no other Deltek orgs/repos) | `git push` and `gh` authentication for skill PRs |
-| `PAPERCLIP_GH_BOT_USER` | Injected by Paperclip per heartbeat | n/a | The bot account login (e.g. `paperclip-bot`) used in `git config user.name` for the commit's author field |
-| `PAPERCLIP_GH_BOT_EMAIL` | Injected by Paperclip per heartbeat | n/a | Email for `git config user.email` (e.g. `paperclip-bot@deltek.com`) |
+| `GITHUB_SKILLS_TOKEN` | User-supplied GitHub PAT, injected by Paperclip per heartbeat | `repo:write` on the company-skills repo only (no other Deltek orgs/repos) | `git push` and `gh` authentication for skill PRs; the PAT also supplies the GitHub commit author identity |
 | `PAPERCLIP_AGENT_ID` | Already injected (existing) | n/a | Used in the per-agent commit trailer for attribution |
 
-If `PAPERCLIP_GH_BOT_TOKEN` is **absent**, the workflow is not available in your environment yet — do not fall back to a personal token. Comment on the issue with `blocked: bot token not injected for this run` and PATCH to `blocked` so WS5 owners can finish provisioning.
+If `GITHUB_SKILLS_TOKEN` is **absent**, the workflow is not available in your environment yet — do not fall back to your own personal token. Comment on the issue with `blocked: GITHUB_SKILLS_TOKEN not injected for this run` and PATCH to `blocked` so WS5 owners can finish provisioning.
 
 The token is **runtime-only**. Do not write it to disk, do not pass it on command lines (use `gh auth login --with-token` via stdin, or `GH_TOKEN` in the environment), and do not echo it in comments or logs.
 
@@ -66,17 +64,17 @@ Co-Authored-By: Paperclip <noreply@paperclip.ing>
 X-Paperclip-Agent-Id: <agent-id>
 ```
 
-- `Co-Authored-By` is the existing Paperclip rule (see the `paperclip` skill) and surfaces the bot identity in the GitHub UI.
-- `X-Paperclip-Agent-Id` is the per-agent attribution trailer. Use the literal value of `$PAPERCLIP_AGENT_ID` — this is what lets GitHub commit data join Paperclip's run audit later (every Paperclip API mutation already carries `X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID`; the same agent id appears on the run record).
-- Both trailers go at the **end** of the commit message, separated from the body by a blank line, in the order shown above. Don't substitute a real GitHub identity for the agent id — bot identity is in the author field already.
+- `Co-Authored-By` is the existing Paperclip rule (see the `paperclip` skill) and surfaces the Paperclip-system identity in the GitHub UI alongside the human PAT-holder who appears in the commit author field.
+- `X-Paperclip-Agent-Id` is the per-agent attribution trailer. Use the literal value of `$PAPERCLIP_AGENT_ID` — this is what lets GitHub commit data join Paperclip's run audit later (every Paperclip API mutation already carries `X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID`; the same agent id appears on the run record). This trailer is required even though the GitHub commit author is the PAT-holder — the author field identifies *whose* PAT pushed, not *which* agent ran.
+- Both trailers go at the **end** of the commit message, separated from the body by a blank line, in the order shown above.
 
 ### End-to-end worked example
 
 Scenario: agent `a30415ac-99a8-485b-a49b-146c0d9d8407` (Full-Stack Developer) edits the `sdlc-process` skill under issue `TEC-1050`.
 
 ```bash
-# 0. Confirm the bot credential is present this heartbeat.
-test -n "$PAPERCLIP_GH_BOT_TOKEN" || { echo "no bot token; cannot push"; exit 1; }
+# 0. Confirm the GitHub PAT is present this heartbeat.
+test -n "$GITHUB_SKILLS_TOKEN" || { echo "GITHUB_SKILLS_TOKEN not injected; cannot push"; exit 1; }
 
 # 1. From a fresh checkout / worktree of the company-skills repo, branch off main.
 cd "$COMPANY_SKILLS_REPO"
@@ -86,17 +84,15 @@ git switch -c skills/sdlc-process/add-pr-workflow-section origin/main
 # 2. Make edits to skills/sdlc-process/SKILL.md (or other files under skills/<skill>/).
 $EDITOR skills/sdlc-process/SKILL.md
 
-# 3. Configure the local committer identity to the bot for this commit chain.
-git config user.name  "$PAPERCLIP_GH_BOT_USER"
-git config user.email "$PAPERCLIP_GH_BOT_EMAIL"
-
-# 4. Stage and commit. Trailers go at the END of the message, separated by a blank line.
+# 3. Stage and commit. The PAT carries its own GitHub author identity — no
+#    git config user.name / user.email override is needed. Trailers go at the
+#    END of the message, separated from the body by a blank line.
 git add skills/sdlc-process/SKILL.md
 git commit -m "$(cat <<EOF
 TEC-1050: document push/PR workflow for company skill edits
 
 - New "Company Skill Repository Workflow" section
-- Bot token env var contract
+- GITHUB_SKILLS_TOKEN env var contract
 - Per-agent commit trailer
 
 Co-Authored-By: Paperclip <noreply@paperclip.ing>
@@ -104,13 +100,13 @@ X-Paperclip-Agent-Id: ${PAPERCLIP_AGENT_ID}
 EOF
 )"
 
-# 5. Authenticate gh with the bot token (stdin only — never on the command line).
-printf '%s' "$PAPERCLIP_GH_BOT_TOKEN" | gh auth login --with-token
+# 4. Authenticate gh with the PAT (stdin only — never on the command line).
+printf '%s' "$GITHUB_SKILLS_TOKEN" | gh auth login --with-token
 
-# 6. Push the branch.
+# 5. Push the branch.
 git push -u origin skills/sdlc-process/add-pr-workflow-section
 
-# 7. Open the PR. Title carries the Paperclip identifier; reviewers are Dev Lead + QA.
+# 6. Open the PR. Title carries the Paperclip identifier; reviewers are Dev Lead + QA.
 gh pr create \
   --base main \
   --head skills/sdlc-process/add-pr-workflow-section \
@@ -118,7 +114,7 @@ gh pr create \
   --reviewer "@deltek/dev-lead,@deltek/qa-engineer" \
   --body "$(cat <<'EOF'
 ## Summary
-Adds the Company Skill Repository Workflow section to `skills/sdlc-process/SKILL.md`, defines the `PAPERCLIP_GH_BOT_TOKEN` env var contract, and documents the per-agent commit trailer.
+Adds the Company Skill Repository Workflow section to `skills/sdlc-process/SKILL.md`, defines the `GITHUB_SKILLS_TOKEN` env var contract, and documents the per-agent commit trailer.
 
 ## Paperclip
 - Issue: [TEC-1050](/TEC/issues/TEC-1050)
@@ -140,9 +136,9 @@ After `gh pr create` returns, the PR URL is the handoff artifact. The IC's heart
 
 ### Local-only repo carve-out (transition period)
 
-Until the company-skills repo is provisioned and the bot token is being injected (WS5), the company-skills repo is local-only. During the transition, follow the **local-only repo carve-out** in the [Pre-handoff branch + commit verification](#pre-handoff-branch--commit-verification) on-fail table: commit your work to a feature branch, leave a checkpoint note that the repo is local-only, cite the local commit SHA in the handoff, and proceed. Do not silently push to a personal remote.
+Until the company-skills repo is provisioned and `GITHUB_SKILLS_TOKEN` is being injected (WS5), the company-skills repo is local-only. During the transition, follow the **local-only repo carve-out** in the [Pre-handoff branch + commit verification](#pre-handoff-branch--commit-verification) on-fail table: commit your work to a feature branch, leave a checkpoint note that the repo is local-only, cite the local commit SHA in the handoff, and proceed. Do not silently push to a personal remote.
 
-Once `PAPERCLIP_GH_BOT_TOKEN` is being injected, the carve-out no longer applies — every skill edit must ship via PR.
+Once `GITHUB_SKILLS_TOKEN` is being injected, the carve-out no longer applies — every skill edit must ship via PR.
 
 ### What this section does **not** cover
 

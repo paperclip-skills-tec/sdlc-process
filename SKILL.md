@@ -26,6 +26,130 @@ These are mandatory for every agent on every heartbeat involving code:
 - PRs reference the Paperclip issue identifier in the title
 - Squash-merge preferred for clean history
 - Parallel development uses git worktrees for isolation
+- Edits to **company skills** (anything under `skills/<skill-name>/` in the hosted company-skills repo) follow the dedicated **Company Skill Repository Workflow** below — feature branch + PR, never a local fast-forward to `main`.
+
+## Company Skill Repository Workflow
+
+This applies whenever an agent edits a company skill in the hosted skills repo (one repo per company, each skill as a `skills/<skill-name>/` subdirectory — see [TEC-1039](/TEC/issues/TEC-1039#document-plan)). It does **not** apply to product/application repos, which use the standard branching rules above.
+
+Skills are high-leverage prompt code that every agent in the company depends on. A bad skill diff silently degrades every subsequent heartbeat. The workflow below trades a few minutes of review latency for a durable audit trail and human checkpoint.
+
+### Hard rules
+
+1. **Never fast-forward `main` locally.** Even though the local clone has a writable `main`, all changes ship via PR on the hosted remote.
+2. **One skill change per branch / per PR.** Don't bundle unrelated skill edits — review surface stays small, rollback stays cheap.
+3. **Branch name:** `skills/<skill-name>/<short-description>` — e.g. `skills/sdlc-process/add-pr-workflow-section`. The skill name in the branch matches the directory name. Include the Paperclip issue identifier in the commit message and PR title (not necessarily the branch).
+4. **Two-reviewer rule:** every skill PR requires **Dev Lead + QA Engineer** approval before merge, regardless of size. Branch protection on `main` enforces 1 review at the GitHub level; the second is a process expectation (and is what `CODEOWNERS` will eventually automate). The detailed reviewer checklist lives in the QA-owned skill-PR review doc — see [TEC-1048](/TEC/issues/TEC-1048).
+5. **No secrets in commits or PR descriptions.** Skill bodies are prompt text — every reviewer reads them. Treat the diff as if it were already public.
+
+### Bot credential contract
+
+Agents do not push using personal credentials. A single shared GitHub service account (provisioned by the board / IT under WS5) holds the push credential for the company-skills repo. Paperclip injects it into the heartbeat environment, mirroring the `PAPERCLIP_API_KEY` pattern.
+
+| Env var | Source | Scope | Purpose |
+| --- | --- | --- | --- |
+| `PAPERCLIP_GH_BOT_TOKEN` | Injected by Paperclip per heartbeat | `repo:write` on the company-skills repo only (no other Deltek orgs/repos) | `git push` and `gh` authentication for skill PRs |
+| `PAPERCLIP_GH_BOT_USER` | Injected by Paperclip per heartbeat | n/a | The bot account login (e.g. `paperclip-bot`) used in `git config user.name` for the commit's author field |
+| `PAPERCLIP_GH_BOT_EMAIL` | Injected by Paperclip per heartbeat | n/a | Email for `git config user.email` (e.g. `paperclip-bot@deltek.com`) |
+| `PAPERCLIP_AGENT_ID` | Already injected (existing) | n/a | Used in the per-agent commit trailer for attribution |
+
+If `PAPERCLIP_GH_BOT_TOKEN` is **absent**, the workflow is not available in your environment yet — do not fall back to a personal token. Comment on the issue with `blocked: bot token not injected for this run` and PATCH to `blocked` so WS5 owners can finish provisioning.
+
+The token is **runtime-only**. Do not write it to disk, do not pass it on command lines (use `gh auth login --with-token` via stdin, or `GH_TOKEN` in the environment), and do not echo it in comments or logs.
+
+### Commit attribution
+
+Every skill commit must carry both trailers, exactly as written:
+
+```
+Co-Authored-By: Paperclip <noreply@paperclip.ing>
+X-Paperclip-Agent-Id: <agent-id>
+```
+
+- `Co-Authored-By` is the existing Paperclip rule (see the `paperclip` skill) and surfaces the bot identity in the GitHub UI.
+- `X-Paperclip-Agent-Id` is the per-agent attribution trailer. Use the literal value of `$PAPERCLIP_AGENT_ID` — this is what lets GitHub commit data join Paperclip's run audit later (every Paperclip API mutation already carries `X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID`; the same agent id appears on the run record).
+- Both trailers go at the **end** of the commit message, separated from the body by a blank line, in the order shown above. Don't substitute a real GitHub identity for the agent id — bot identity is in the author field already.
+
+### End-to-end worked example
+
+Scenario: agent `a30415ac-99a8-485b-a49b-146c0d9d8407` (Full-Stack Developer) edits the `sdlc-process` skill under issue `TEC-1050`.
+
+```bash
+# 0. Confirm the bot credential is present this heartbeat.
+test -n "$PAPERCLIP_GH_BOT_TOKEN" || { echo "no bot token; cannot push"; exit 1; }
+
+# 1. From a fresh checkout / worktree of the company-skills repo, branch off main.
+cd "$COMPANY_SKILLS_REPO"
+git fetch origin
+git switch -c skills/sdlc-process/add-pr-workflow-section origin/main
+
+# 2. Make edits to skills/sdlc-process/SKILL.md (or other files under skills/<skill>/).
+$EDITOR skills/sdlc-process/SKILL.md
+
+# 3. Configure the local committer identity to the bot for this commit chain.
+git config user.name  "$PAPERCLIP_GH_BOT_USER"
+git config user.email "$PAPERCLIP_GH_BOT_EMAIL"
+
+# 4. Stage and commit. Trailers go at the END of the message, separated by a blank line.
+git add skills/sdlc-process/SKILL.md
+git commit -m "$(cat <<EOF
+TEC-1050: document push/PR workflow for company skill edits
+
+- New "Company Skill Repository Workflow" section
+- Bot token env var contract
+- Per-agent commit trailer
+
+Co-Authored-By: Paperclip <noreply@paperclip.ing>
+X-Paperclip-Agent-Id: ${PAPERCLIP_AGENT_ID}
+EOF
+)"
+
+# 5. Authenticate gh with the bot token (stdin only — never on the command line).
+printf '%s' "$PAPERCLIP_GH_BOT_TOKEN" | gh auth login --with-token
+
+# 6. Push the branch.
+git push -u origin skills/sdlc-process/add-pr-workflow-section
+
+# 7. Open the PR. Title carries the Paperclip identifier; reviewers are Dev Lead + QA.
+gh pr create \
+  --base main \
+  --head skills/sdlc-process/add-pr-workflow-section \
+  --title "TEC-1050: document push/PR workflow for company skill edits" \
+  --reviewer "@deltek/dev-lead,@deltek/qa-engineer" \
+  --body "$(cat <<'EOF'
+## Summary
+Adds the Company Skill Repository Workflow section to `skills/sdlc-process/SKILL.md`, defines the `PAPERCLIP_GH_BOT_TOKEN` env var contract, and documents the per-agent commit trailer.
+
+## Paperclip
+- Issue: [TEC-1050](/TEC/issues/TEC-1050)
+- Parent: [TEC-1039](/TEC/issues/TEC-1039#document-plan)
+
+## AI tool disclosure
+Drafted by Full-Stack Developer (Claude). Reviewed against the parent plan before push.
+
+## Reviewers
+- Dev Lead (architecture / consistency with parent plan)
+- QA (per the WS4 skill-PR review checklist — [TEC-1048](/TEC/issues/TEC-1048))
+EOF
+)"
+
+# gh prints the PR URL on success — paste it into the Paperclip issue handoff comment.
+```
+
+After `gh pr create` returns, the PR URL is the handoff artifact. The IC's heartbeat does **not** merge the PR — that's a reviewer action gated on the two approvals.
+
+### Local-only repo carve-out (transition period)
+
+Until the company-skills repo is provisioned and the bot token is being injected (WS5), the company-skills repo is local-only. During the transition, follow the **local-only repo carve-out** in the [Pre-handoff branch + commit verification](#pre-handoff-branch--commit-verification) on-fail table: commit your work to a feature branch, leave a checkpoint note that the repo is local-only, cite the local commit SHA in the handoff, and proceed. Do not silently push to a personal remote.
+
+Once `PAPERCLIP_GH_BOT_TOKEN` is being injected, the carve-out no longer applies — every skill edit must ship via PR.
+
+### What this section does **not** cover
+
+- The actual repo provisioning, branch protection rules, and bot account setup → tracked under **WS5** of [TEC-1039](/TEC/issues/TEC-1039#document-plan).
+- The reviewer checklist (frontmatter sanity, secret-leak scan, cross-skill consistency, etc.) → tracked under **WS4** ([TEC-1048](/TEC/issues/TEC-1048)).
+- The CI workflow that runs on every skill PR → tracked under **WS3** ([TEC-1051](/TEC/issues/TEC-1051)).
+- Migrating existing local skill repos into the hosted repo with preserved history → **WS1** ([TEC-1049](/TEC/issues/TEC-1049)).
 
 ## Coding Standards
 
@@ -202,6 +326,9 @@ If you are unsure whether a bypass applies, default to running the check. A fals
 | **Enhanced** | New features, multi-module, new APIs, DB schema | QA + Dev Lead | Board review |
 | **Security** | Auth, access control, crypto, credentials | QA + Dev Lead | Board approval |
 | **Critical** | Architecture, new services, infra, breaking changes | QA + Dev Lead | Board approval + docs |
+| **Skill PR** | Any edit to a company skill (`skills/<skill-name>/…` in the company-skills repo) | QA + Dev Lead | No (unless the skill itself is Security/Critical scope) |
+
+**Skill PRs always require both Dev Lead and QA Engineer approval**, regardless of diff size — see [Company Skill Repository Workflow](#company-skill-repository-workflow). Skills run on every heartbeat, so the blast radius of a bad merge is global.
 
 ## Security — OWASP Top 10 Checkpoints
 

@@ -71,6 +71,7 @@ These are mandatory for every agent on every heartbeat involving code:
 - [ ] `down` migration tested locally (if applicable)
 - [ ] No secrets, credentials, or PII in code or commit history
 - [ ] **Client–server payload-shape verified** (required for Enhanced / Security / Critical tiers; recommended for Standard): any new or modified client component that fetches a server endpoint (wizard, picker, list-fetch, table) has EITHER (a) a contract test that uses the real route handler OR a fixture captured from it, OR (b) a Playwright smoke that exercises the component against the running server. Synthetic hand-rolled row shapes alone do NOT satisfy this gate. Motivation: [TEC-1001](/TEC/issues/TEC-1001) PR #16 column-alias mismatch passed unit tests but failed end-to-end.
+- [ ] **Pre-handoff branch + commit verification passed** (required for any code-implementation issue before PATCHing `in_progress → in_review`). Run the bash check in the **"Pre-handoff branch + commit verification"** section below; a failure means do NOT patch to `in_review`. Motivation: [TEC-1019](/TEC/issues/TEC-1019) — recurring failure where ICs handed off without committed work, costing QA a full review heartbeat on phantom changes.
 - [ ] Checkpoint comment posted
 - [ ] PR description includes Paperclip issue link and AI tool disclosure
 
@@ -98,6 +99,66 @@ These are mandatory for every agent on every heartbeat involving code:
 - [ ] No errors in logs for 10 minutes post-deploy
 - [ ] Rollback path confirmed working
 - [ ] Board informed (for user-facing changes)
+
+## Pre-handoff branch + commit verification
+
+**Mandatory** before an IC PATCHes a code-implementation issue from `in_progress` to `in_review`. Catches the failure mode described in [TEC-1019](/TEC/issues/TEC-1019), where ICs handed off issues without their work being committed/pushed — so QA woke up, pulled, and found nothing on the named branch. This is the **consumer-side** version of the gate (per the [TEC-1022 plan](/TEC/issues/TEC-1022#document-plan), Surface 1).
+
+### When to run
+
+Run before the PATCH that moves the issue to `in_review`, in the same active execution workspace where the work was done.
+
+### The check
+
+Copy-run this bash block, replacing `<cwd>` with the workspace path (or omit the `-C <cwd>` if you are already inside the working tree) and `<issue-identifier>` with the actual issue identifier (e.g. `TEC-1029`):
+
+```bash
+IDENT="<issue-identifier>"
+NEEDLE="$(printf '%s' "$IDENT" | tr '[:upper:]' '[:lower:]')"
+
+# 1. Branch present locally or on origin?
+MATCHED_REF="$(git -C <cwd> for-each-ref \
+  --format='%(refname)' refs/heads/ refs/remotes/origin/ \
+  | grep -iE "(^|[^0-9])${NEEDLE}([^0-9]|\$)" \
+  | head -n1)"
+
+if [ -z "$MATCHED_REF" ]; then
+  echo "FAIL: no branch references ${IDENT}"
+  exit 1
+fi
+
+# 2. At least one commit on the matching branch references the identifier?
+if ! git -C <cwd> log "$MATCHED_REF" --grep="${IDENT}" -i --pretty=%H -n1 \
+     | grep -q .; then
+  echo "FAIL: branch ${MATCHED_REF} found but no commit references ${IDENT}"
+  exit 1
+fi
+
+echo "PASS: ${IDENT} verified on ${MATCHED_REF}"
+```
+
+**Match rule:** non-digit boundary regex on the lowercased identifier. This is intentional: `tec-1019` does NOT match `tec-10199`. Substring matches across digit boundaries would cause false positives on near-numbered issues.
+
+### On fail — do NOT PATCH to `in_review`
+
+| Failure | What it means | Required action |
+| --- | --- | --- |
+| `no branch references ${IDENT}` and the workspace **exists** | Work isn't yet committed onto a branch named for this issue. | Commit the work onto a branch named for this issue (e.g. `feature/TEC-NNN-short-description`), push it, then re-run the check. |
+| `branch ${REF} found but no commit references ${IDENT}` and the workspace **exists** | Branch exists but no commit message references the identifier. | Either amend / add a commit that references the identifier in the message, push, then re-run; or, if commits exist but the message lacks the identifier, add a follow-up commit (e.g. `TEC-NNN: include identifier in handoff trail`). |
+| Any failure and the **workspace was lost mid-flight** (matches the [TEC-1005](/TEC/issues/TEC-1005) failure mode — execution disappeared, working tree gone) | Recovery requires recreating the workspace and recommitting. | PATCH the issue to `blocked` with the unblock action: `"execution workspace lost; recreate workspace and recommit"`. Do NOT silently re-PATCH to `in_review`. |
+
+The skill must NOT instruct you to PATCH `in_review` when this check fails. Treat a failed check as the same class of blocker as a failing test.
+
+### Bypass cases (do NOT run the check on these)
+
+The check must not false-positive on legitimate hand-offs that don't have a code working tree. Skip when ANY of the following apply:
+
+- **Plan-only or research issues** — no working tree was opened, no code change is expected. The hand-off is a plan document or comment, not a branch.
+- **Tasks routed back to a user/board** for review (not to QA Engineer). User/board reviewers don't pull the branch the way QA does, so the check protects no downstream cost.
+- **Doc-only edits made directly without a workspace** — e.g. an Obsidian-vault edit, an issue-document edit, or a comment-only deliverable. There is no branch by design.
+- **The issue's deliverable is a Paperclip artifact** (an approval, a comment with structured payload, an issue document) and the issue description does not call for code changes.
+
+If you are unsure whether a bypass applies, default to running the check. A false-fail is cheaper than a missed handoff.
 
 ## Code Review Checklist
 

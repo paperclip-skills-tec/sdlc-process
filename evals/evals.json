@@ -1,0 +1,61 @@
+{
+  "skill_name": "sdlc-process",
+  "evals": [
+    {
+      "id": 1,
+      "name": "pre-handoff-pass-case",
+      "prompt": "I'm about to PATCH issue TEC-2001 from in_progress to in_review. Working tree at /tmp/repo, currently on branch feature/TEC-2001-add-export. git log shows one commit on this branch with message 'TEC-2001: add CSV export endpoint'. for-each-ref lists refs/heads/feature/TEC-2001-add-export. Should I run any pre-handoff check, and what is the expected outcome?",
+      "expected_output": "Should locate the 'Pre-handoff branch + commit verification' section. Should walk through the bash block: NEEDLE='tec-2001'; for-each-ref grep matches refs/heads/feature/TEC-2001-add-export (case-insensitive, non-digit boundary holds); git log --grep='TEC-2001' on that ref returns the commit SHA. Both checks pass. Conclude: PASS — proceed with PATCH to in_review.",
+      "assertions": [
+        "Identifies and runs the Pre-handoff branch + commit verification check",
+        "Lowercases the identifier to 'tec-2001' for the regex needle",
+        "Confirms branch match via for-each-ref grep",
+        "Confirms commit match via git log --grep",
+        "Concludes PASS and authorises the in_review PATCH"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "pre-handoff-fail-no-branch",
+      "prompt": "I'm about to PATCH TEC-2002 to in_review. Working tree at /tmp/repo. for-each-ref output: refs/heads/main, refs/heads/feature/TEC-1999-something-else, refs/remotes/origin/main. The workspace still exists. What should I do?",
+      "expected_output": "Should run the verification, lowercase to 'tec-2002', grep for-each-ref output and find no match (only TEC-1999 and main refs exist; non-digit boundary rule prevents tec-1999/main from matching tec-2002). Should report 'FAIL: no branch references TEC-2002'. Should NOT instruct the IC to PATCH in_review. Per the on-fail table: workspace exists → commit work onto a TEC-2002-named branch, push, then re-run the check.",
+      "assertions": [
+        "Runs the verification and detects no matching branch",
+        "Returns the FAIL message naming the missing identifier",
+        "Refuses to PATCH the issue to in_review",
+        "Instructs commit + push onto a TEC-2002-named branch and re-run",
+        "Does not falsely match TEC-1999 or main as a TEC-2002 branch"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "pre-handoff-fail-no-commit",
+      "prompt": "I'm about to PATCH TEC-2003 to in_review. Branch feature/TEC-2003-foo exists locally and on origin. But git log feature/TEC-2003-foo --grep='TEC-2003' -i returns nothing — the branch was created but no commits reference the identifier. Workspace exists. What should I do?",
+      "expected_output": "Should run the check: branch match succeeds via for-each-ref. Then git log --grep on the matched ref returns empty, so the second check fails with 'FAIL: branch feature/TEC-2003-foo found but no commit references TEC-2003'. Should NOT PATCH in_review. Should add a commit that references TEC-2003 in the message (or amend an existing one if appropriate), push, then re-run the check.",
+      "assertions": [
+        "Confirms the first check (branch match) passes",
+        "Detects the second check (commit match) fails",
+        "Returns the FAIL message naming both the branch and the missing identifier",
+        "Refuses to PATCH the issue to in_review",
+        "Instructs adding a commit that references TEC-2003 and pushing"
+      ],
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "pre-handoff-bypass-plan-only",
+      "prompt": "I'm finishing TEC-2004, which is a plan-only issue. The deliverable is the issue's plan document. No working tree was ever opened for this issue, no branch exists, no code changes were made. I'm about to reassign back to the requester (Dev Lead) for plan review. Do I need to run the pre-handoff branch+commit check?",
+      "expected_output": "Should consult the Bypass cases list and identify that this is BOTH a plan-only/research issue (no working tree) AND a hand-off back to a non-QA reviewer (Dev Lead/requester). Either bypass alone is sufficient. Should NOT run the git check. Should proceed with the in_review PATCH and reassign to the Dev Lead. Should briefly cite the bypass reason (plan-only, no working tree) so the audit trail is clear.",
+      "assertions": [
+        "Recognises the bypass cases section applies",
+        "Identifies plan-only / no-working-tree as a valid bypass",
+        "Identifies routing-back-to-requester (non-QA) as a separately valid bypass",
+        "Skips the git verification check",
+        "Proceeds with the in_review PATCH and notes the bypass reason"
+      ],
+      "files": []
+    }
+  ]
+}

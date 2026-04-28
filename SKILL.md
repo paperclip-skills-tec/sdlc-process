@@ -80,18 +80,19 @@ Use this protocol when the shared-working-tree checks above fail late — i.e. a
 3. **Revert the contamination on the wrong branch.** If the misrouted commit was pushed to `origin/<actual-target>`, revert it there so the affected PR's diff returns to its intended state:
 
    ```bash
-   git switch <actual-target>
+   git fetch origin                       # ensure local <actual-target> isn't stale before reverting
+   git switch <actual-target>             # or: git worktree add ~/.paperclip/worktrees/<issue-identifier>-revert/ <actual-target>
    git revert <sha> --no-edit
    git push origin <actual-target>
    ```
 
-   Do not force-push to delete history on a shared branch — revert.
+   The worktree alternative mirrors step 2's pattern — if the shared checkout you're recovering in is the one that was just contaminated, switching branches inside it re-enters the failure mode the protocol is recovering from. The `git fetch origin` defends against the parallel-push race: a stale local `<actual-target>` would otherwise non-fast-forward (or worse, push back over a concurrent commit). Do not force-push to delete history on a shared branch — revert.
 
 4. **Disclose on the affected PR's source issue.** If a stray commit reached `origin/<other-branch>`, post a comment on the Paperclip issue that owns that branch's PR, describing:
    - the contaminating SHA and what it actually contained,
    - which branch/PR it contaminated and which branch it now lives on,
    - the revert SHA on the contaminated branch,
-   - and an `[@reviewer]` mention of the PR's reviewer/merger so they re-check the diff before merging.
+   - and `[@reviewer]` mentions for every reviewer required by that PR's review tier — skill PRs: Dev Lead + QA Engineer (per [Company Skill Repository Workflow](#company-skill-repository-workflow)); application PRs: per the [Review Tiers](#review-tiers) table — so they re-check the diff before merging.
 
    Disclosure is mandatory even if the revert returned the branch to its prior state — the reviewer needs to know the history is non-linear.
 

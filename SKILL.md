@@ -28,6 +28,82 @@ These are mandatory for every agent on every heartbeat involving code:
 - Parallel development uses git worktrees for isolation
 - Edits to **company skills** (anything under `skills/<skill-name>/` in the hosted company-skills repo) follow the dedicated **Company Skill Repository Workflow** below — feature branch + PR, never a local fast-forward to `main`.
 
+### Shared working-tree protocol
+
+Working trees are per-agent by default. When two agents edit the same checkout in the same heartbeat, one agent's `git status` snapshot can be invalidated by the other's branch switch, stash, or commit between commands — and a `git push` then lands on the wrong branch. Motivation: [TEC-1065](/TEC/issues/TEC-1065) — interim skill-level mitigation for the [TEC-1044](/TEC/issues/TEC-1044) incident, where a branch swap between `git status` and `git commit` landed unrelated work on `fix/tec-997-bootstrap-icons-font` and contaminated PR #26 on `origin`.
+
+1. **One agent per working tree per heartbeat.** This is the default assumption for every git command in this skill. If you are not sure another agent is using the same checkout, assume they are not — but verify before committing (rule 3).
+2. **Per-issue worktree when the checkout is shared.** When `PAPERCLIP_EXECUTION_WORKSPACE_ID` is **null** AND `git status` shows another agent's branch checked out (i.e. the current branch is not the one you intend to work on, or the working tree contains uncommitted changes you did not stage), you MUST add a per-issue worktree before any code edit:
+
+   ```bash
+   git worktree add -b <branch-name> ~/.paperclip/worktrees/<issue-identifier>/ <base-ref>
+   cd ~/.paperclip/worktrees/<issue-identifier>/
+   ```
+
+   Use the `superpowers:using-git-worktrees` skill for the full mechanics. The worktree path is keyed on the Paperclip issue identifier (e.g. `~/.paperclip/worktrees/TEC-1068/`) so concurrent issues never collide.
+3. **Branch-identity check around every commit and push.** Shared-checkout branch swaps are silent. Before `git commit` AND before `git push`, capture the current branch and abort if it has moved since you last ran `git status`:
+
+   ```bash
+   EXPECTED_BRANCH="skills/sdlc-process/shared-working-tree-protocol"  # whatever you intended
+   ACTUAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+   if [ "$ACTUAL_BRANCH" != "$EXPECTED_BRANCH" ]; then
+     echo "ABORT: HEAD is on $ACTUAL_BRANCH, expected $EXPECTED_BRANCH" >&2
+     exit 1
+   fi
+   ```
+
+   Run this immediately before each mutating command, not once at the start of the heartbeat. Treat a mismatch as a hard stop — do not "fix" it by checking out the expected branch, because that would also throw away whatever the other agent staged.
+
+### Cross-agent contamination recovery
+
+Use this protocol when the shared-working-tree checks above fail late — i.e. a commit has already landed on a branch you did not intend, or a push has already contaminated `origin`. Motivation: same [TEC-1065](/TEC/issues/TEC-1065) / [TEC-1044](/TEC/issues/TEC-1044) incident; recovery is expected to take the rest of a heartbeat, so report blocked early rather than improvising.
+
+1. **Detect.** Compare commit history on the branch you intended to work on with the branch the commit actually landed on:
+
+   ```bash
+   git log <expected-branch> --oneline -10
+   git log <actual-target>  --oneline -10
+   ```
+
+   If the SHA referencing your issue identifier appears on `<actual-target>` but not on `<expected-branch>`, you have a misrouted commit. If the misrouted SHA is also on `origin/<actual-target>`, you have an `origin` contamination as well — both must be addressed.
+
+2. **Cherry-pick onto the intended branch.** Bring the work onto the branch it should have been on, then push:
+
+   ```bash
+   git switch <expected-branch>          # or: git worktree add -b <expected-branch> ~/.paperclip/worktrees/<issue-identifier>/ <base-ref>
+   git cherry-pick <sha>                 # the misrouted commit's SHA
+   git push origin <expected-branch>
+   ```
+
+   Resolve cherry-pick conflicts the normal way; do not skip the cherry-pick to "save time" — the audit trail must show the work landed on the right branch.
+
+3. **Revert the contamination on the wrong branch.** If the misrouted commit was pushed to `origin/<actual-target>`, revert it there so the affected PR's diff returns to its intended state:
+
+   ```bash
+   git switch <actual-target>
+   git revert <sha> --no-edit
+   git push origin <actual-target>
+   ```
+
+   Do not force-push to delete history on a shared branch — revert.
+
+4. **Disclose on the affected PR's source issue.** If a stray commit reached `origin/<other-branch>`, post a comment on the Paperclip issue that owns that branch's PR, describing:
+   - the contaminating SHA and what it actually contained,
+   - which branch/PR it contaminated and which branch it now lives on,
+   - the revert SHA on the contaminated branch,
+   - and an `[@reviewer]` mention of the PR's reviewer/merger so they re-check the diff before merging.
+
+   Disclosure is mandatory even if the revert returned the branch to its prior state — the reviewer needs to know the history is non-linear.
+
+5. **Stash hygiene.** Stashes are global to the repo, not per-branch, so a stash created by another agent will appear in your `git stash list`. Never apply a stash by label alone:
+
+   ```bash
+   git stash list                        # see all entries, including ones you did not create
+   git stash show -p stash@{N}           # inspect the diff before doing anything with it
+   ```
+
+   Only `git stash pop` / `git stash apply` after the diff matches what you expect. If a stash label looks like yours but the diff does not, treat it as another agent's work and leave it alone.
+
 ## Company Skill Repository Workflow
 
 This applies whenever an agent edits a company skill in the hosted skills repo (one repo per company, each skill as a `skills/<skill-name>/` subdirectory — see [TEC-1039](/TEC/issues/TEC-1039#document-plan)). It does **not** apply to product/application repos, which use the standard branching rules above.

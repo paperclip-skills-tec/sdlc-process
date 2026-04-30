@@ -70,6 +70,48 @@
         "Does not require a push/origin action for the carve-out path"
       ],
       "files": []
+    },
+    {
+      "id": 6,
+      "name": "shared-working-tree-worktree-trigger",
+      "prompt": "I am agent TEC-2006-agent working on issue TEC-2006. My intended branch is feature/TEC-2006-foo. PAPERCLIP_EXECUTION_WORKSPACE_ID is null. I run git status and see: 'On branch fix/tec-997-bootstrap-icons-font'. The working tree has no uncommitted changes. I need to edit src/components/Header.tsx for my task. What should I do before making any edits?",
+      "expected_output": "Should identify the 'Shared working-tree protocol' section, specifically rule 2: when PAPERCLIP_EXECUTION_WORKSPACE_ID is null AND git status shows another agent's branch checked out (fix/tec-997-bootstrap-icons-font is not feature/TEC-2006-foo), the agent MUST add a per-issue worktree before any code edit. Should instruct: git worktree add -b feature/TEC-2006-foo ~/.paperclip/worktrees/TEC-2006/ <base-ref>, then cd ~/.paperclip/worktrees/TEC-2006/. Should NOT proceed with edits in the current checkout. Should reference the superpowers:using-git-worktrees skill for full mechanics. The worktree path is keyed on the Paperclip issue identifier so concurrent issues never collide.",
+      "assertions": [
+        "Identifies PAPERCLIP_EXECUTION_WORKSPACE_ID as null, triggering the shared-checkout check",
+        "Detects that the current branch (fix/tec-997-bootstrap-icons-font) is not the intended branch (feature/TEC-2006-foo)",
+        "Requires creating a per-issue worktree before any code edit per rule 2",
+        "Uses the correct worktree path keyed on the issue identifier (~/.paperclip/worktrees/TEC-2006/)",
+        "Does NOT proceed with edits in the existing checkout"
+      ],
+      "files": []
+    },
+    {
+      "id": 7,
+      "name": "shared-working-tree-branch-identity-hard-stop",
+      "prompt": "I am about to run git commit on branch feature/TEC-2007-dashboard. Per the shared working-tree protocol rule 3, I run the branch-identity check immediately before committing. EXPECTED_BRANCH is 'feature/TEC-2007-dashboard'. I execute: ACTUAL_BRANCH=$(git rev-parse --abbrev-ref HEAD) and it returns 'fix/tec-997-bootstrap-icons-font'. EXPECTED_BRANCH != ACTUAL_BRANCH. What must I do?",
+      "expected_output": "Should identify the 'Branch-identity check around every commit and push' section (rule 3 of the shared working-tree protocol). The mismatch (EXPECTED_BRANCH='feature/TEC-2007-dashboard' vs ACTUAL_BRANCH='fix/tec-997-bootstrap-icons-font') is a hard stop. The agent MUST emit the ABORT message: 'ABORT: HEAD is on fix/tec-997-bootstrap-icons-font, expected feature/TEC-2007-dashboard' and exit without committing. Critically, the agent must NOT attempt to check out the expected branch to 'fix' the mismatch, because that would throw away whatever the other agent staged. This is a hard stop — do not proceed, do not self-correct the branch.",
+      "assertions": [
+        "Identifies the branch-identity check mismatch as a hard stop per rule 3",
+        "Emits the ABORT message naming both the actual and expected branches",
+        "Does NOT commit — exits without any mutating git operation",
+        "Does NOT attempt to git checkout or git switch to the expected branch to fix the mismatch",
+        "Treats the mismatch as unrecoverable in this heartbeat — does not attempt workarounds"
+      ],
+      "files": []
+    },
+    {
+      "id": 8,
+      "name": "cross-agent-contamination-recovery-full",
+      "prompt": "I am working on issue TEC-2006. My intended branch is feature/TEC-2006-foo. I discover that commit abc1234 with message 'TEC-2006: add export handler' landed on fix/other-branch instead of feature/TEC-2006-foo. git log fix/other-branch shows abc1234 but git log feature/TEC-2006-foo does not. Furthermore, abc1234 is already on origin/fix/other-branch (it was pushed). The Paperclip issue that owns fix/other-branch's PR is TEC-3050, and the PR reviewer is @qa-engineer. Walk me through the full recovery.",
+      "expected_output": "Should identify the 'Cross-agent contamination recovery' section and walk through all five steps. Step 1 — Detect: compare git log on both branches, confirm abc1234 appears on fix/other-branch but not feature/TEC-2006-foo, and note that abc1234 is also on origin/fix/other-branch so origin contamination must also be addressed. Step 2 — Cherry-pick: git switch feature/TEC-2006-foo, git cherry-pick abc1234, git push origin feature/TEC-2006-foo — resolve conflicts normally, do not skip the cherry-pick. Step 3 — Revert on fix/other-branch: git switch fix/other-branch, git revert abc1234 --no-edit, git push origin fix/other-branch — do not force-push, use revert. Step 4 — Disclose on TEC-3050: post a comment on the Paperclip issue that owns fix/other-branch's PR (TEC-3050) describing the contaminating SHA (abc1234), what it contained (TEC-2006 export handler), which branch/PR it contaminated (fix/other-branch), which branch it now lives on (feature/TEC-2006-foo), the revert SHA on fix/other-branch, and an @qa-engineer mention so they re-check the diff before merging. Step 5 — Stash hygiene: note that stashes are global to the repo; list stashes with git stash list, inspect with git stash show -p stash@{N} before applying, and only pop/apply if the diff matches expectations — leave unfamiliar stashes alone.",
+      "assertions": [
+        "Walks through step 1 (detect): compares git log on both branches, identifies abc1234 as misrouted and confirms origin contamination",
+        "Walks through step 2 (cherry-pick): switches to feature/TEC-2006-foo, cherry-picks abc1234, pushes — does not skip the cherry-pick",
+        "Walks through step 3 (revert): switches to fix/other-branch, reverts abc1234, pushes — uses revert not force-push",
+        "Walks through step 4 (disclose): posts on TEC-3050 with the contaminating SHA, affected branch/PR, revert SHA, and @qa-engineer mention",
+        "Walks through step 5 (stash hygiene): notes stashes are global, instructs inspecting stash diffs before applying, leaves unfamiliar stashes alone"
+      ],
+      "files": []
     }
   ]
 }

@@ -555,3 +555,7 @@ Use `SDLC:` for process/tooling/checkpoint changes; use `WORK:` for output-quali
 ***
 
 *Source: Paperclip AI SDLC Process v2.1 ([TEC-792](/TEC/issues/TEC-792)). Release Management added in [TEC-1718](/TEC/issues/TEC-1718). Full document in Obsidian vault at `02_Reference/AI & Strategy/AI SDLC Process.md`.*
+
+---
+
+*TEC Custom Skill — maintained by the Deltek Technical Services Engineering team.*

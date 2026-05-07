@@ -423,6 +423,136 @@ The check must not false-positive on legitimate hand-offs that don't have a code
 
 If you are unsure whether a bypass applies, default to running the check. A false-fail is cheaper than a missed handoff.
 
+## Issue Lifecycle Closeout
+
+Status transitions carry downstream consequences — wakes, reviewer assignments, Watchdog scans. Use the checklists and payloads below to transition correctly.
+
+### Transitioning to `in_review`
+
+Use when handing off completed work for review. The reviewer target depends on issue shape.
+
+**Checklist:**
+
+* [ ] All acceptance criteria self-certified in a comment
+* [ ] Pre-handoff branch + commit verification passed (code issues only — see [above](#pre-handoff-branch--commit-verification))
+* [ ] Checkpoint comment posted with summary of changes
+* [ ] PR opened and linked (code issues only)
+
+**Routing precedence:**
+
+1. **Explicit `Hand-off:` in the issue description** — follow it exactly.
+2. **Child task** (`parentId` set) — assign to QA Engineer (`d158fe7b-f2d2-48d1-ba20-18ea21d94d06`), or Dev Lead (`5a301e20-07a8-4a34-b113-4818437c02ac`) if QA is not appropriate.
+3. **Top-level issue** (no `parentId`, `createdByUserId` set) — assign to Dev Lead and let them route. Never assign a top-level issue directly to `local-board` from IC handoff.
+
+**Payload:**
+
+```bash
+scripts/paperclip-issue-update.sh --issue-id "$PAPERCLIP_TASK_ID" --status in_review <<'MD'
+## Ready for review
+
+- [summary of what was done]
+- PR: [link]
+MD
+```
+
+Or via curl:
+
+```json
+PATCH /api/issues/{issueId}
+Headers: X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
+{
+  "status": "in_review",
+  "assigneeAgentId": "<reviewer-agent-id>",
+  "comment": "## Ready for review\n\n- [summary]\n- PR: [link]"
+}
+```
+
+### Transitioning to `done`
+
+Use when the issue is fully complete with no follow-up needed.
+
+**Checklist:**
+
+* [ ] All acceptance criteria met
+* [ ] Completion comment posted (see [TEC-1119](#tec-1119-completion-comment) requirements below)
+* [ ] No unresolved blocking review comments
+* [ ] Work product committed / merged / delivered
+
+**Payload:**
+
+```bash
+scripts/paperclip-issue-update.sh --issue-id "$PAPERCLIP_TASK_ID" --status done <<'MD'
+## Done
+
+- [what was completed]
+- [outcome or artifact link]
+MD
+```
+
+Or via curl:
+
+```json
+PATCH /api/issues/{issueId}
+Headers: X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
+{
+  "status": "done",
+  "comment": "## Done\n\n- [what was completed]\n- [outcome or artifact link]"
+}
+```
+
+### Transitioning to `blocked`
+
+Use when the issue cannot proceed until a specific external action occurs.
+
+**Checklist:**
+
+* [ ] Blocker is specific: name the unblock owner and the exact action needed
+* [ ] Use `blockedByIssueIds` when another Paperclip issue is the blocker — do not rely on free-text alone
+* [ ] For external blockers (missing env var, pending approval, infrastructure), include owner, expected resolution date, and unblock condition in the comment
+* [ ] **Dedup check**: if your most recent comment on this issue was a blocked-status update and no one has replied since, do NOT re-comment — skip the issue entirely and only re-engage when new context arrives (comment, status change, event wake)
+
+**Payload:**
+
+```json
+PATCH /api/issues/{issueId}
+Headers: X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
+{
+  "status": "blocked",
+  "blockedByIssueIds": ["<blocker-issue-id>"],
+  "comment": "Blocked: [description]\n\n- **Owner:** [who must act]\n- **Action:** [what they must do]\n- **Expected:** [when / condition for unblock]"
+}
+```
+
+### TEC-1119 Completion Comment {#tec-1119-completion-comment}
+
+Before your session exits on a `done` issue, you must post a final comment containing structured completion output. The Paperclip Watchdog scans for this — issues marked `done` without a valid completion comment are auto-flagged. See [TEC-1119](/TEC/issues/TEC-1119).
+
+**A valid completion comment must include one of:**
+
+* A heading line: `## Done`, `## Summary`, `## Completed`, `## Result`, `## Output`, or `## Finished`
+* A status line starting with: `Done`, `Completed`, or `Finished`
+
+**Must NOT contain blocker language:** `blocked by`, `waiting on`, `unresolved`, `cannot proceed`, or similar phrases that contradict the `done` status.
+
+**Example:**
+
+```markdown
+## Done
+
+- Implemented feature X; tests pass
+- PR opened and linked
+```
+
+### Blocked-Task Dedup Rule
+
+When waking on a `blocked` issue, check the comment thread before taking action. If **all** of these are true, skip the issue — do not checkout, do not re-comment:
+
+1. Your most recent comment was a blocked-status update
+2. No one has replied since that comment
+3. No new event (status change, blocker resolution) triggered this wake
+
+Only re-engage when new context arrives: a reply, a `issue_blockers_resolved` wake, or a status change by another agent.
+
 ## Code Review Checklist
 
 ### BLOCKING — must pass before merge
